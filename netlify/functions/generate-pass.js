@@ -153,16 +153,42 @@ exports.handler = async (event, context) => {
 
     const passJsonContent = JSON.stringify(passJSON);
 
-    // Calculate SHA1 hash for manifest
-    const passJsonHash = crypto.createHash('sha1').update(passJsonContent).digest('hex');
-
-    // Create manifest.json
-    const manifest = {
-      'pass.json': passJsonHash,
+    // Apple Wallet requires icon images - create placeholder icons
+    const iconSizes = [
+      { name: 'icon.png', size: 29 },
+      { name: 'icon@2x.png', size: 58 },
+      { name: 'icon@3x.png', size: 87 }
+    ];
+    
+    // Create minimal valid PNG icons (1x1 transparent pixel)
+    // In production, replace these with actual icon images
+    const createPlaceholderIcon = () => {
+      // Base64-encoded 1x1 transparent PNG
+      return Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        'base64'
+      );
     };
-    const manifestContent = JSON.stringify(manifest);
+    
+    // Create icon files
+    const iconFiles = {};
+    iconSizes.forEach(icon => {
+      iconFiles[icon.name] = createPlaceholderIcon();
+    });
 
-    // Sign manifest.json with PKCS#7 using node-forge (no openssl needed)
+    // Calculate SHA1 hashes for all files (pass.json + icons)
+    const fileHashes = {
+      'pass.json': crypto.createHash('sha1').update(passJsonContent).digest('hex')
+    };
+    
+    iconSizes.forEach(icon => {
+      fileHashes[icon.name] = crypto.createHash('sha1').update(iconFiles[icon.name]).digest('hex');
+    });
+    
+    // Create manifest.json with all file hashes
+    const manifestContent = JSON.stringify(fileHashes);
+
+    // Sign manifest.json with PKCS#7 using node-forge
     const certBuffer = Buffer.from(certBase64, 'base64');
     
     try {
@@ -196,7 +222,6 @@ exports.handler = async (event, context) => {
       }
       
       // Apple requires the WWDR (Worldwide Developer Relations) intermediate certificate
-      // This must be included in the PKCS#7 signature
       let wwdrCertificate = null;
       const wwdrCertBase64 = process.env.WWDR_CERT_BASE64;
       
@@ -230,7 +255,6 @@ exports.handler = async (event, context) => {
           value: forge.pki.oids.data
         }, {
           type: forge.pki.oids.messageDigest
-          // Note: messageDigest value will be computed automatically
         }, {
           type: forge.pki.oids.signingTime,
           value: new Date()
@@ -249,6 +273,11 @@ exports.handler = async (event, context) => {
       zip.file('pass.json', passJsonContent);
       zip.file('manifest.json', manifestContent);
       zip.file('signature', signature);
+      
+      // Add required icon files
+      iconSizes.forEach(icon => {
+        zip.file(icon.name, iconFiles[icon.name]);
+      });
 
       // Generate ZIP
       const pkpassBuffer = await zip.generateAsync({
