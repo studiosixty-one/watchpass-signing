@@ -195,10 +195,16 @@ exports.handler = async (event, context) => {
         throw new Error('Failed to extract private key or certificate from .p12 file');
       }
       
-      // Create PKCS#7 signed data
+      // Apple requires the WWDR (Worldwide Developer Relations) intermediate certificate
+      // Download from: https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+      // For now, we'll try without it first, but this might be the issue
+      
+      // Create PKCS#7 signed data (detached signature)
       const p7 = forge.pkcs7.createSignedData();
       p7.content = forge.util.createBuffer(manifestContent, 'utf8');
       p7.addCertificate(certificate);
+      
+      // Add signer with proper attributes for Apple Wallet
       p7.addSigner({
         key: privateKey,
         certificate: certificate,
@@ -208,13 +214,15 @@ exports.handler = async (event, context) => {
           value: forge.pki.oids.data
         }, {
           type: forge.pki.oids.messageDigest
+          // Note: messageDigest value will be computed automatically
         }, {
           type: forge.pki.oids.signingTime,
           value: new Date()
         }]
       });
       
-      p7.sign({ detached: false });
+      // Sign with detached signature (Apple Wallet requirement)
+      p7.sign({ detached: true });
       
       // Convert to DER format
       const derBuffer = forge.asn1.toDer(p7.toAsn1()).getBytes();
