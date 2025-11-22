@@ -196,13 +196,29 @@ exports.handler = async (event, context) => {
       }
       
       // Apple requires the WWDR (Worldwide Developer Relations) intermediate certificate
-      // Download from: https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
-      // For now, we'll try without it first, but this might be the issue
+      // This must be included in the PKCS#7 signature
+      let wwdrCertificate = null;
+      const wwdrCertBase64 = process.env.WWDR_CERT_BASE64;
+      
+      if (wwdrCertBase64) {
+        try {
+          const wwdrDer = forge.util.decode64(wwdrCertBase64);
+          const wwdrAsn1 = forge.asn1.fromDer(wwdrDer);
+          wwdrCertificate = forge.pki.certificateFromAsn1(wwdrAsn1);
+        } catch (e) {
+          console.warn('Failed to parse WWDR certificate:', e.message);
+        }
+      }
       
       // Create PKCS#7 signed data (detached signature)
       const p7 = forge.pkcs7.createSignedData();
       p7.content = forge.util.createBuffer(manifestContent, 'utf8');
       p7.addCertificate(certificate);
+      
+      // Add WWDR certificate if available (required by Apple)
+      if (wwdrCertificate) {
+        p7.addCertificate(wwdrCertificate);
+      }
       
       // Add signer with proper attributes for Apple Wallet
       p7.addSigner({
