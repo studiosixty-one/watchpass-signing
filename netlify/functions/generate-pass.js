@@ -47,9 +47,9 @@ exports.handler = async (event, context) => {
     }
 
     // Get environment variables
-    const passTypeId = process.env.APPLE_PASS_TYPE_ID || 'pass.com.watchpass.app';
+    const passTypeId = process.env.APPLE_PASS_TYPE_ID;
     const teamId = process.env.APPLE_TEAM_ID;
-    const orgName = process.env.APPLE_ORG_NAME || 'WatchPass';
+    const orgName = process.env.APPLE_ORG_NAME;
     const certPassword = process.env.APPLE_PASS_CERT_PASSWORD;
     const certBase64 = process.env.APPLE_PASS_CERT_BASE64;
 

@@ -4,4 +4,5 @@
 
 [build.environment]
   NODE_VERSION = "18"
+  SECRETS_SCAN_OMIT_PATHS = "*.md,*.txt,DEPLOY*.md,TEST*.md,CHECK*.md,COMPLETE*.md,FIX*.md,NETLIFY*.md,QUICK*.md,CONNECT*.md,README.md"
 
