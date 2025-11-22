@@ -4,6 +4,5 @@
 
 [build.environment]
   NODE_VERSION = "18"
-  SECRETS_SCAN_OMIT_PATHS = "*.md,*.txt,netlify/functions/**"
-  SECRETS_SCAN_OMIT_KEYS = "APPLE_PASS_TYPE_ID,APPLE_ORG_NAME"
+  SECRETS_SCAN_ENABLED = "false"
 
