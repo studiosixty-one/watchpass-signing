@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
 const forge = require('node-forge');
+const { PNG } = require('pngjs');
 
 // Cache certificate in memory (Lambda container reuse)
 let cachedCertificate = null;
@@ -160,14 +161,24 @@ exports.handler = async (event, context) => {
       { name: 'icon@3x.png', size: 87 }
     ];
     
-    // Create minimal valid PNG icons (1x1 transparent pixel)
-    // In production, replace these with actual icon images
-    const createPlaceholderIcon = () => {
-      // Base64-encoded 1x1 transparent PNG
-      return Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        'base64'
-      );
+    // Create properly sized placeholder icons using pngjs
+    // Apple requires specific sizes: 29x29, 58x58, 87x87 pixels
+    const createPlaceholderIcon = (size) => {
+      const png = new PNG({ width: size, height: size });
+      
+      // Fill with a simple color (light gray with transparency)
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const idx = (size * y + x) << 2;
+          png.data[idx] = 200;     // R
+          png.data[idx + 1] = 200; // G
+          png.data[idx + 2] = 200; // B
+          png.data[idx + 3] = 255; // A (opaque)
+        }
+      }
+      
+      // Convert to buffer
+      return PNG.sync.write(png);
     };
     
     // Create icon files
