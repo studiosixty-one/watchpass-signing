@@ -2,10 +2,10 @@
 // This avoids the 4KB Lambda environment variable limit
 
 const crypto = require('crypto');
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
+const forge = require('node-forge');
 
 // Cache certificate in memory (Lambda container reuse)
 let cachedCertificate = null;
@@ -162,43 +162,63 @@ exports.handler = async (event, context) => {
     };
     const manifestContent = JSON.stringify(manifest);
 
-    // Sign manifest.json with PKCS#7
+    // Sign manifest.json with PKCS#7 using node-forge (no openssl needed)
     const certBuffer = Buffer.from(certBase64, 'base64');
     
-    // Write certificate to temp file
-    const tmpDir = '/tmp';
-    const certPath = path.join(tmpDir, 'cert.p12');
-    const manifestPath = path.join(tmpDir, 'manifest.json');
-    const signaturePath = path.join(tmpDir, 'signature');
-    
-    fs.writeFileSync(certPath, certBuffer);
-    fs.writeFileSync(manifestPath, manifestContent);
-
     try {
-      // Extract private key and certificate from .p12
-      const keyPath = path.join(tmpDir, 'key.pem');
-      const certPemPath = path.join(tmpDir, 'cert.pem');
+      // Convert .p12 to base64 DER format for forge
+      const p12Der = forge.util.decode64(certBase64);
       
-      // Extract private key
-      execSync(
-        `openssl pkcs12 -in ${certPath} -nocerts -nodes -passin pass:${certPassword} -out ${keyPath}`,
-        { stdio: 'pipe' }
-      );
+      // Parse .p12 file
+      const p12Asn1 = forge.asn1.fromDer(p12Der);
+      const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, certPassword);
       
-      // Extract certificate
-      execSync(
-        `openssl pkcs12 -in ${certPath} -clcerts -nokeys -passin pass:${certPassword} -out ${certPemPath}`,
-        { stdio: 'pipe' }
-      );
-
-      // Sign manifest.json with PKCS#7
-      execSync(
-        `openssl smime -binary -sign -certfile ${certPemPath} -signer ${certPemPath} -inkey ${keyPath} -in ${manifestPath} -out ${signaturePath} -outform DER -nodetach`,
-        { stdio: 'pipe' }
-      );
-
-      // Read signature
-      const signature = fs.readFileSync(signaturePath);
+      // Extract private key and certificate
+      let privateKey = null;
+      let certificate = null;
+      
+      // Get keybags and certbags
+      const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+      const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
+      
+      // Get the first key
+      if (keyBags[forge.pki.oids.pkcs8ShroudedKeyBag]) {
+        privateKey = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0].key;
+      }
+      
+      // Get the first certificate
+      if (certBags[forge.pki.oids.certBag]) {
+        certificate = certBags[forge.pki.oids.certBag][0].cert;
+      }
+      
+      if (!privateKey || !certificate) {
+        throw new Error('Failed to extract private key or certificate from .p12 file');
+      }
+      
+      // Create PKCS#7 signed data
+      const p7 = forge.pkcs7.createSignedData();
+      p7.content = forge.util.createBuffer(manifestContent, 'utf8');
+      p7.addCertificate(certificate);
+      p7.addSigner({
+        key: privateKey,
+        certificate: certificate,
+        digestAlgorithm: forge.pki.oids.sha1,
+        authenticatedAttributes: [{
+          type: forge.pki.oids.contentType,
+          value: forge.pki.oids.data
+        }, {
+          type: forge.pki.oids.messageDigest
+        }, {
+          type: forge.pki.oids.signingTime,
+          value: new Date()
+        }]
+      });
+      
+      p7.sign({ detached: false });
+      
+      // Convert to DER format
+      const derBuffer = forge.asn1.toDer(p7.toAsn1()).getBytes();
+      const signature = Buffer.from(derBuffer, 'binary');
 
       // Create .pkpass ZIP file
       const zip = new JSZip();
@@ -213,14 +233,7 @@ exports.handler = async (event, context) => {
         compressionOptions: { level: 9 },
       });
 
-      // Clean up temp files
-      [certPath, keyPath, certPemPath, manifestPath, signaturePath].forEach((file) => {
-        try {
-          if (fs.existsSync(file)) fs.unlinkSync(file);
-        } catch (e) {
-          // Ignore cleanup errors
-        }
-      });
+      // No temp files to clean up (using in-memory processing)
 
       // Return the .pkpass file
       return {
