@@ -137,8 +137,8 @@ exports.handler = async (event, context) => {
       organizationName: orgName,
       description: 'Watch Ownership Certificate',
       logoText: watch.brand,
-      foregroundColor: 'rgb(0, 0, 0)',
-      backgroundColor: 'rgb(255, 255, 255)',
+      foregroundColor: 'rgb(255, 255, 255)',
+      backgroundColor: 'rgb(0, 0, 0)',
       generic: {
         primaryFields: [
           { key: 'brand', label: 'Brand', value: watch.brand },
