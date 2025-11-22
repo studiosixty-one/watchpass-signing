@@ -53,7 +53,7 @@ exports.handler = async (event, context) => {
     const certPassword = process.env.APPLE_PASS_CERT_PASSWORD;
     const certBase64 = process.env.APPLE_PASS_CERT_BASE64;
 
-    if (!teamId || !certBase64 || !certPassword) {
+    if (!passTypeId || !teamId || !orgName || !certBase64 || !certPassword) {
       return {
         statusCode: 500,
         headers: {
@@ -62,7 +62,14 @@ exports.handler = async (event, context) => {
         },
         body: JSON.stringify({
           error: 'Missing required environment variables',
-          required: ['APPLE_TEAM_ID', 'APPLE_PASS_CERT_BASE64', 'APPLE_PASS_CERT_PASSWORD'],
+          required: ['APPLE_PASS_TYPE_ID', 'APPLE_TEAM_ID', 'APPLE_ORG_NAME', 'APPLE_PASS_CERT_BASE64', 'APPLE_PASS_CERT_PASSWORD'],
+          missing: [
+            !passTypeId && 'APPLE_PASS_TYPE_ID',
+            !teamId && 'APPLE_TEAM_ID',
+            !orgName && 'APPLE_ORG_NAME',
+            !certBase64 && 'APPLE_PASS_CERT_BASE64',
+            !certPassword && 'APPLE_PASS_CERT_PASSWORD'
+          ].filter(Boolean),
         }),
       };
     }
