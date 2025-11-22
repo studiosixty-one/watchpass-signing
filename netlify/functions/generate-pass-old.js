@@ -1,57 +1,14 @@
-// Netlify Function that fetches certificate from Supabase Storage
-// This avoids the 4KB Lambda environment variable limit
+// Netlify Serverless Function for Apple Wallet Pass Signing
+// This handles the actual PKCS#7 signing that Deno Edge Functions can't easily do
+
+// Using a simpler approach: we'll create the pass structure and sign it manually
+// This avoids needing pass templates
 
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
-
-// Cache certificate in memory (Lambda container reuse)
-let cachedCertificate = null;
-let certCacheTime = 0;
-const CACHE_TTL = 3600000; // 1 hour
-
-async function getCertificate() {
-  // Check cache first
-  if (cachedCertificate && Date.now() - certCacheTime < CACHE_TTL) {
-    return cachedCertificate;
-  }
-
-  // Fetch from Supabase Storage
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-  const certPath = process.env.CERT_STORAGE_PATH || 'wallet-certificates/certificate.p12';
-
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Supabase credentials not configured');
-  }
-
-  try {
-    const response = await fetch(`${supabaseUrl}/storage/v1/object/${certPath}`, {
-      headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'apikey': supabaseKey,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch certificate: ${response.status} ${response.statusText}`);
-    }
-
-    const certBuffer = await response.arrayBuffer();
-    const certBase64 = Buffer.from(certBuffer).toString('base64');
-
-    // Cache it
-    cachedCertificate = certBase64;
-    certCacheTime = Date.now();
-
-    return certBase64;
-  } catch (error) {
-    console.error('Error fetching certificate:', error);
-    throw error;
-  }
-}
 
 exports.handler = async (event, context) => {
   // CORS headers
@@ -94,8 +51,35 @@ exports.handler = async (event, context) => {
     const teamId = process.env.APPLE_TEAM_ID;
     const orgName = process.env.APPLE_ORG_NAME;
     const certPassword = process.env.APPLE_PASS_CERT_PASSWORD;
+    
+    // Certificate is too large for Lambda env vars (4KB limit)
+    // Fetch from Supabase Storage or use a smaller storage solution
+    // For now, we'll fetch from environment variable but it should be in Netlify Dashboard only
+    let certBase64 = process.env.APPLE_PASS_CERT_BASE64;
+    
+    // If certificate is not in env (too large), try fetching from Supabase
+    if (!certBase64 || certBase64.length < 100) {
+      // Option: Fetch from Supabase Storage
+      // const supabaseUrl = process.env.SUPABASE_URL;
+      // const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+      // certBase64 = await fetchFromSupabaseStorage(supabaseUrl, supabaseKey);
+      
+      // For now, return error with instructions
+      return {
+        statusCode: 500,
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          error: 'Certificate not available',
+          message: 'Certificate is too large for Lambda environment variables (4KB limit)',
+          solution: 'Store certificate in Supabase Storage and fetch at runtime, or use a different hosting solution',
+        }),
+      };
+    }
 
-    if (!passTypeId || !teamId || !orgName || !certPassword) {
+    if (!passTypeId || !teamId || !orgName || !certBase64 || !certPassword) {
       return {
         statusCode: 500,
         headers: {
@@ -104,26 +88,14 @@ exports.handler = async (event, context) => {
         },
         body: JSON.stringify({
           error: 'Missing required environment variables',
-          required: ['APPLE_PASS_TYPE_ID', 'APPLE_TEAM_ID', 'APPLE_ORG_NAME', 'APPLE_PASS_CERT_PASSWORD'],
-        }),
-      };
-    }
-
-    // Fetch certificate from Supabase Storage
-    let certBase64;
-    try {
-      certBase64 = await getCertificate();
-    } catch (certError) {
-      return {
-        statusCode: 500,
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          error: 'Failed to fetch certificate',
-          message: certError.message,
-          solution: 'Upload certificate to Supabase Storage and set SUPABASE_URL, SUPABASE_SERVICE_KEY, and CERT_STORAGE_PATH',
+          required: ['APPLE_PASS_TYPE_ID', 'APPLE_TEAM_ID', 'APPLE_ORG_NAME', 'APPLE_PASS_CERT_BASE64', 'APPLE_PASS_CERT_PASSWORD'],
+          missing: [
+            !passTypeId && 'APPLE_PASS_TYPE_ID',
+            !teamId && 'APPLE_TEAM_ID',
+            !orgName && 'APPLE_ORG_NAME',
+            !certBase64 && 'APPLE_PASS_CERT_BASE64',
+            !certPassword && 'APPLE_PASS_CERT_PASSWORD'
+          ].filter(Boolean),
         }),
       };
     }
@@ -163,9 +135,10 @@ exports.handler = async (event, context) => {
     const manifestContent = JSON.stringify(manifest);
 
     // Sign manifest.json with PKCS#7
+    // We need to extract the private key from the .p12 certificate
     const certBuffer = Buffer.from(certBase64, 'base64');
     
-    // Write certificate to temp file
+    // Write certificate to temp file (Netlify functions have /tmp directory)
     const tmpDir = '/tmp';
     const certPath = path.join(tmpDir, 'cert.p12');
     const manifestPath = path.join(tmpDir, 'manifest.json');
@@ -176,6 +149,7 @@ exports.handler = async (event, context) => {
 
     try {
       // Extract private key and certificate from .p12
+      // Use openssl to extract the key (Netlify functions have openssl available)
       const keyPath = path.join(tmpDir, 'key.pem');
       const certPemPath = path.join(tmpDir, 'cert.pem');
       
@@ -263,4 +237,3 @@ exports.handler = async (event, context) => {
     };
   }
 };
-
