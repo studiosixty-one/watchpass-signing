@@ -13,6 +13,10 @@ let cachedCertificate = null;
 let certCacheTime = 0;
 const CACHE_TTL = 3600000; // 1 hour
 
+// Cache icons in memory
+let cachedIcons = null;
+let iconsCacheTime = 0;
+
 async function getCertificate() {
   // Check cache first
   if (cachedCertificate && Date.now() - certCacheTime < CACHE_TTL) {
@@ -51,6 +55,74 @@ async function getCertificate() {
   } catch (error) {
     console.error('Error fetching certificate:', error);
     throw error;
+  }
+}
+
+async function getIcons() {
+  // Check cache first
+  if (cachedIcons && Date.now() - iconsCacheTime < CACHE_TTL) {
+    return cachedIcons;
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  const iconsBasePath = process.env.ICONS_STORAGE_PATH || 'wallet-assets/icons';
+
+  if (!supabaseUrl || !supabaseKey) {
+    // Return empty object, will use placeholders
+    return {};
+  }
+
+  const iconSizes = [
+    { name: 'icon.png', storagePath: `${iconsBasePath}/icon.png` },
+    { name: 'icon@2x.png', storagePath: `${iconsBasePath}/icon@2x.png` },
+    { name: 'icon@3x.png', storagePath: `${iconsBasePath}/icon@3x.png` }
+  ];
+
+  const icons = {};
+
+  try {
+    // Fetch all icons in parallel
+    const fetchPromises = iconSizes.map(async (icon) => {
+      try {
+        const response = await fetch(`${supabaseUrl}/storage/v1/object/${icon.storagePath}`, {
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'apikey': supabaseKey,
+          },
+        });
+
+        if (!response.ok) {
+          console.warn(`Icon ${icon.name} not found at ${icon.storagePath}, will use placeholder`);
+          return null;
+        }
+
+        const iconBuffer = await response.arrayBuffer();
+        return { name: icon.name, data: Buffer.from(iconBuffer) };
+      } catch (error) {
+        console.warn(`Error fetching icon ${icon.name}:`, error.message);
+        return null;
+      }
+    });
+
+    const results = await Promise.all(fetchPromises);
+
+    // Store successfully fetched icons
+    results.forEach((result) => {
+      if (result) {
+        icons[result.name] = result.data;
+      }
+    });
+
+    // Cache icons (even if some are missing)
+    cachedIcons = icons;
+    iconsCacheTime = Date.now();
+
+    return icons;
+  } catch (error) {
+    console.error('Error fetching icons:', error);
+    // Return empty object, will fall back to placeholders
+    return {};
   }
 }
 
@@ -154,19 +226,18 @@ exports.handler = async (event, context) => {
 
     const passJsonContent = JSON.stringify(passJSON);
 
-    // Apple Wallet requires icon images - create placeholder icons
+    // Apple Wallet requires icon images - fetch from Supabase or use placeholders
     const iconSizes = [
       { name: 'icon.png', size: 29 },
       { name: 'icon@2x.png', size: 58 },
       { name: 'icon@3x.png', size: 87 }
     ];
     
-    // Create properly sized placeholder icons using pngjs
-    // Apple requires specific sizes: 29x29, 58x58, 87x87 pixels
+    // Create properly sized placeholder icons using pngjs (fallback)
     const createPlaceholderIcon = (size) => {
       const png = new PNG({ width: size, height: size });
       
-      // Fill with a simple color (light gray with transparency)
+      // Fill with a simple color (light gray)
       for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
           const idx = (size * y + x) << 2;
@@ -177,14 +248,27 @@ exports.handler = async (event, context) => {
         }
       }
       
-      // Convert to buffer
       return PNG.sync.write(png);
     };
     
-    // Create icon files
+    // Try to fetch icons from Supabase Storage
+    let fetchedIcons = {};
+    try {
+      fetchedIcons = await getIcons();
+    } catch (error) {
+      console.warn('Failed to fetch icons from Supabase, using placeholders:', error.message);
+    }
+    
+    // Create icon files - use fetched icons or fall back to placeholders
     const iconFiles = {};
     iconSizes.forEach(icon => {
-      iconFiles[icon.name] = createPlaceholderIcon(icon.size);
+      if (fetchedIcons[icon.name]) {
+        // Use icon from Supabase Storage
+        iconFiles[icon.name] = fetchedIcons[icon.name];
+      } else {
+        // Fall back to placeholder
+        iconFiles[icon.name] = createPlaceholderIcon(icon.size);
+      }
     });
 
     // Calculate SHA1 hashes for all files (pass.json + icons)
