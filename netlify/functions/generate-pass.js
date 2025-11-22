@@ -184,7 +184,7 @@ exports.handler = async (event, context) => {
     // Create icon files
     const iconFiles = {};
     iconSizes.forEach(icon => {
-      iconFiles[icon.name] = createPlaceholderIcon();
+      iconFiles[icon.name] = createPlaceholderIcon(icon.size);
     });
 
     // Calculate SHA1 hashes for all files (pass.json + icons)
